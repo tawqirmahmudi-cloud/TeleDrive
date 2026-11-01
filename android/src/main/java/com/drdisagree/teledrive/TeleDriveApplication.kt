@@ -1,6 +1,11 @@
 package com.drdisagree.teledrive
 
+import android.app.AlarmManager
 import android.app.Application
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.os.Build
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
@@ -11,6 +16,7 @@ import com.drdisagree.teledrive.core.proxy.ProxyFailover
 import com.drdisagree.teledrive.core.publish.PublishScheduler
 import com.drdisagree.teledrive.core.transfer.MaintenanceScheduler
 import com.drdisagree.teledrive.core.transfer.MediaStoreWatcher
+import com.drdisagree.teledrive.core.transfer.MediaTriggerService
 import com.drdisagree.teledrive.di.appModules
 import com.drdisagree.teledrive.data.repository.FolderOwnershipRepair
 import com.drdisagree.teledrive.domain.repository.FileRepository
@@ -69,6 +75,10 @@ class TeleDriveApplication : Application(), SingletonImageLoader.Factory {
         mediaStoreWatcher.start()
         proxyFailover.start(applicationScope)
         debugLogController.start(applicationScope, alwaysVerbose = BuildConfig.DEBUG)
+        
+        // ব্যাকগ্রাউন্ড অ্যালার্ম ট্রিগার ইনিশিয়ালাইজ করা (ইনফিনিক্স বা XOS ডিভাইসের জন্য)
+        scheduleBackgroundAlarm()
+
         applicationScope.launch {
             transferRepository.recoverOrphanedTransfers()
             fileRepository.sweepImportOrphans()
@@ -85,6 +95,30 @@ class TeleDriveApplication : Application(), SingletonImageLoader.Factory {
                 instantBackup = prefs.instantBackupEnabled,
                 updateChecks = prefs.updateCheckEnabled
             )
+        }
+    }
+
+    private fun scheduleBackgroundAlarm() {
+        try {
+            val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            val intent = Intent(this, MediaTriggerService::class.java)
+            val pendingIntent = PendingIntent.getService(
+                this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            
+            // প্রতি ১৫ মিনিট পরপর অ্যালার্ম ট্রিগার করার জন্য সেট করা হলো
+            val triggerTime = System.currentTimeMillis() + (15 * 60 * 1000)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (alarmManager.canScheduleExactAlarms()) {
+                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+                } else {
+                    alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+                }
+            } else {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 }
